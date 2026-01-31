@@ -1849,7 +1849,7 @@ static long syz_emit_ethernet(volatile long a0, volatile long a1, volatile long 
 }
 #endif
 
-#if SYZ_EXECUTOR || __NR_syz_io_uring_submit || __NR_syz_io_uring_complete || __NR_syz_io_uring_setup
+#if SYZ_EXECUTOR || __NR_syz_io_uring_submit || __NR_syz_io_uring_complete || __NR_syz_io_uring_setup || __NR_syz_ublk_setup || __NR_syz_ublk_setup_io_uring
 
 #define SIZEOF_IO_URING_SQE 64
 #define SIZEOF_IO_URING_CQE 16
@@ -1875,8 +1875,69 @@ static long syz_emit_ethernet(volatile long a0, volatile long a1, volatile long 
 #define CQ_RING_OVERFLOW_OFFSET 284
 #define CQ_FLAGS_OFFSET 280
 #define CQ_CQES_OFFSET 320
+#define IORING_SETUP_SQE128 (1U << 10)
+#define IORING_SETUP_CQE32 (1U << 11)
+#define IORING_SETUP_CQSIZE (1U << 3) /* app defines CQ size */
 
-#if SYZ_EXECUTOR || __NR_syz_io_uring_complete
+struct io_sqring_offsets {
+	__u32 head;
+	__u32 tail;
+	__u32 ring_mask;
+	__u32 ring_entries;
+	__u32 flags;
+	__u32 dropped;
+	__u32 array;
+	__u32 resv1;
+	__u64 user_addr;
+};
+
+struct io_cqring_offsets {
+	__u32 head;
+	__u32 tail;
+	__u32 ring_mask;
+	__u32 ring_entries;
+	__u32 overflow;
+	__u32 cqes;
+	__u32 flags;
+	__u32 resv1;
+	__u64 user_addr;
+};
+
+struct io_uring_params {
+	uint32 sq_entries;
+	uint32 cq_entries;
+	uint32 flags;
+	uint32 sq_thread_cpu;
+	uint32 sq_thread_idle;
+	uint32 features;
+	uint32 resv[4];
+	struct io_sqring_offsets sq_off;
+	struct io_cqring_offsets cq_off;
+};
+
+void print_uring_params(struct io_uring_params* p)
+{
+	fprintf(stdout, "TEJA Syzkaller: io_uring_params START\n");
+	fprintf(stdout,
+		"TEJA Syzkaller: io_uring_params ptr: %p flags: 0x%x sq_entries: %d "
+		"cq_entries: %d\n",
+		(void*)p, p->flags, p->sq_entries, p->cq_entries);
+	fprintf(stdout,
+		"TEJA Syzkaller: io_uring_params sq_off.head: %u sq_off.tail: %u "
+		"sq_off.ring_mask: %u sq_off.ring_entries: %u sq_off.array: %u "
+		"sq_off.user_addr: %llu\n",
+		p->sq_off.head, p->sq_off.tail, p->sq_off.ring_mask,
+		p->sq_off.ring_entries, p->sq_off.array, p->sq_off.user_addr);
+	fprintf(stdout,
+		"TEJA Syzkaller: io_uring_params cq_off.head: %u cq_off.tail: %u "
+		"cq_off.ring_mask: %u cq_off.ring_entries: %u cq_off.cqes: %u "
+		"cq_off.user_addr: %llu\n",
+		p->cq_off.head, p->cq_off.tail, p->cq_off.ring_mask,
+		p->cq_off.ring_entries, p->cq_off.cqes, p->cq_off.user_addr);
+	fprintf(stdout, "TEJA Syzkaller: io_uring_params END\n");
+}
+
+#if SYZ_EXECUTOR || __NR_syz_io_uring_complete || __NR_syz_ublk_setup || __NR_syz_ublk_setup_io_uring
 
 // From linux/io_uring.h
 struct io_uring_cqe {
@@ -1885,7 +1946,7 @@ struct io_uring_cqe {
 	uint32 flags;
 };
 
-static long syz_io_uring_complete(volatile long a0)
+static int syz_io_uring_completev2(volatile long a0, volatile long a1)
 {
 	// syzlang: syz_io_uring_complete(ring_ptr ring_ptr)
 	// C:       syz_io_uring_complete(char* ring_ptr)
@@ -1894,15 +1955,23 @@ static long syz_io_uring_complete(volatile long a0)
 
 	// Cast to original
 	char* ring_ptr = (char*)a0;
+	struct io_uring_params* setup_params = (struct io_uring_params*)a1;
+
+	setup_params->flags &= IORING_SETUP_SQE128;
+
+	// bool is_big_setup = (setup_params->flags & IORING_SETUP_CQE32);
+	uint32 cqe_size = (setup_params->flags & IORING_SETUP_CQE32) ? 32 : 16;
+	//	fprintf(stdout, "Teja Syzkaller uring_complete params print\n");
+	//	print_uring_params(setup_params);
 
 	// Compute the head index and the next head value
-	uint32 cq_ring_mask = *(uint32*)(ring_ptr + CQ_RING_MASK_OFFSET);
-	uint32* cq_head_ptr = (uint32*)(ring_ptr + CQ_HEAD_OFFSET);
+	uint32 cq_ring_mask = *(uint32*)(ring_ptr + setup_params->cq_off.ring_mask);
+	uint32* cq_head_ptr = (uint32*)(ring_ptr + setup_params->cq_off.head);
 	uint32 cq_head = *cq_head_ptr & cq_ring_mask;
 	uint32 cq_head_next = *cq_head_ptr + 1;
 
 	// Compute the ptr to the src cq entry on the ring
-	char* cqe_src = ring_ptr + CQ_CQES_OFFSET + cq_head * SIZEOF_IO_URING_CQE;
+	char* cqe_src = ring_ptr + setup_params->cq_off.cqes + cq_head * cqe_size;
 
 	// Get the cq entry from the ring
 	struct io_uring_cqe cqe;
@@ -1918,51 +1987,63 @@ static long syz_io_uring_complete(volatile long a0)
 	// which produces an fd instance. Check cqe.user_data, which should be the same
 	// as sqe.user_data for that operation. If it falls in that unique range, return
 	// cqe.res as fd. Otherwise, just return an invalid fd.
-	return (cqe.user_data == 0x12345 || cqe.user_data == 0x23456) ? (long)cqe.res : (long)-1;
+	// return (cqe.user_data == 0x12345 || cqe.user_data == 0x23456) ? (long)cqe.res : (long)-1;
+	// fprintf(stdout, "TEJA Syzkaller: cqe result in syz_uring_complete: %d\n", cqe.res);
+	return cqe.res;
+}
+
+static long syz_io_uring_complete(volatile long a0, volatile long a1)
+{
+	// syzlang: syz_io_uring_complete(ring_ptr ring_ptr)
+	// C:       syz_io_uring_complete(char* ring_ptr)
+
+	// It is not checked if the ring is empty
+
+	// Cast to original
+	char* ring_ptr = (char*)a0;
+	struct io_uring_params* setup_params = (struct io_uring_params*)a1;
+
+	setup_params->flags &= IORING_SETUP_SQE128;
+
+	// bool is_big_setup = (setup_params->flags & IORING_SETUP_CQE32);
+	uint32 cqe_size = (setup_params->flags & IORING_SETUP_CQE32) ? 32 : 16;
+	//	fprintf(stdout, "Teja Syzkaller uring_complete params print\n");
+	//	print_uring_params(setup_params);
+
+	// Compute the head index and the next head value
+	uint32 cq_ring_mask = *(uint32*)(ring_ptr + setup_params->cq_off.ring_mask);
+	uint32* cq_head_ptr = (uint32*)(ring_ptr + setup_params->cq_off.head);
+	uint32 cq_head = *cq_head_ptr & cq_ring_mask;
+	uint32 cq_head_next = *cq_head_ptr + 1;
+
+	// Compute the ptr to the src cq entry on the ring
+	char* cqe_src = ring_ptr + setup_params->cq_off.cqes + cq_head * cqe_size;
+
+	// Get the cq entry from the ring
+	struct io_uring_cqe cqe;
+	memcpy(&cqe, cqe_src, sizeof(cqe));
+
+	// Advance the head. Head is a free-flowing integer and relies on natural wrapping.
+	// Ensure that the kernel will never see a head update without the preceeding CQE
+	// stores being done.
+	__atomic_store_n(cq_head_ptr, cq_head_next, __ATOMIC_RELEASE);
+
+	// In the descriptions (sys/linux/io_uring.txt), openat and openat2 are passed
+	// with a unique range of sqe.user_data (0x12345 and 0x23456) to identify the operations
+	// which produces an fd instance. Check cqe.user_data, which should be the same
+	// as sqe.user_data for that operation. If it falls in that unique range, return
+	// cqe.res as fd. Otherwise, just return an invalid fd.
+	// return (cqe.user_data == 0x12345 || cqe.user_data == 0x23456) ? (long)cqe.res : (long)-1;
+	// fprintf(stdout, "TEJA Syzkaller: cqe result in syz_uring_complete: %d\n", cqe.res);
+	return (long)cqe.res;
 }
 
 #endif
 
-#if SYZ_EXECUTOR || __NR_syz_io_uring_setup
-
-struct io_sqring_offsets {
-	uint32 head;
-	uint32 tail;
-	uint32 ring_mask;
-	uint32 ring_entries;
-	uint32 flags;
-	uint32 dropped;
-	uint32 array;
-	uint32 resv1;
-	uint64 resv2;
-};
-
-struct io_cqring_offsets {
-	uint32 head;
-	uint32 tail;
-	uint32 ring_mask;
-	uint32 ring_entries;
-	uint32 overflow;
-	uint32 cqes;
-	uint64 resv[2];
-};
-
-struct io_uring_params {
-	uint32 sq_entries;
-	uint32 cq_entries;
-	uint32 flags;
-	uint32 sq_thread_cpu;
-	uint32 sq_thread_idle;
-	uint32 features;
-	uint32 resv[4];
-	struct io_sqring_offsets sq_off;
-	struct io_cqring_offsets cq_off;
-};
+#if SYZ_EXECUTOR || __NR_syz_io_uring_setup || __NR_syz_ublk_setup || __NR_syz_ublk_setup_io_uring
 
 #define IORING_OFF_SQ_RING 0
 #define IORING_OFF_SQES 0x10000000ULL
-#define IORING_SETUP_SQE128 (1U << 10)
-#define IORING_SETUP_CQE32 (1U << 11)
 
 #include <sys/mman.h>
 #include <unistd.h>
@@ -1978,14 +2059,21 @@ static long syz_io_uring_setup(volatile long a0, volatile long a1, volatile long
 	struct io_uring_params* setup_params = (struct io_uring_params*)a1;
 	void** ring_ptr_out = (void**)a2;
 	void** sqes_ptr_out = (void**)a3;
-	// Temporarily disable IORING_SETUP_CQE32 and IORING_SETUP_SQE128 that may change SIZEOF_IO_URING_CQE and SIZEOF_IO_URING_SQE.
-	// Tracking bug: https://github.com/google/syzkaller/issues/4531.
-	setup_params->flags &= ~(IORING_SETUP_CQE32 | IORING_SETUP_SQE128);
+
+	setup_params->flags &= IORING_SETUP_SQE128;
+
+	uint32 sqe_size = (setup_params->flags & IORING_SETUP_SQE128) ? 128 : 64;
+	uint32 cqe_size = (setup_params->flags & IORING_SETUP_CQE32) ? 32 : 16;
+
+	// setup_params->flags &= ~(IORING_SETUP_CQE32 | IORING_SETUP_SQE128);
+	// fprintf(stdout, "TEJA Syzkaller: syz_io_uring_setup called and params flags are negated\n");
 	uint32 fd_io_uring = syscall(__NR_io_uring_setup, entries, setup_params);
+	// fprintf(stdout, "Teja Syzkaller uring_setup params print\n");
+	// print_uring_params(setup_params);
 
 	// Compute the ring sizes
 	uint32 sq_ring_sz = setup_params->sq_off.array + setup_params->sq_entries * sizeof(uint32);
-	uint32 cq_ring_sz = setup_params->cq_off.cqes + setup_params->cq_entries * SIZEOF_IO_URING_CQE;
+	uint32 cq_ring_sz = setup_params->cq_off.cqes + setup_params->cq_entries * cqe_size;
 
 	// Asssumed IORING_FEAT_SINGLE_MMAP, which is always the case with the current implementation
 	// The implication is that the sq_ring_ptr and the cq_ring_ptr are the same but the
@@ -1993,11 +2081,11 @@ static long syz_io_uring_setup(volatile long a0, volatile long a1, volatile long
 	uint32 ring_sz = sq_ring_sz > cq_ring_sz ? sq_ring_sz : cq_ring_sz;
 	*ring_ptr_out = mmap(0, ring_sz, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_POPULATE, fd_io_uring, IORING_OFF_SQ_RING);
 
-	uint32 sqes_sz = setup_params->sq_entries * SIZEOF_IO_URING_SQE;
+	uint32 sqes_sz = setup_params->sq_entries * sqe_size;
 	*sqes_ptr_out = mmap(0, sqes_sz, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_POPULATE, fd_io_uring, IORING_OFF_SQES);
 
 	uint32* array = (uint32*)((uintptr_t)*ring_ptr_out + setup_params->sq_off.array);
-	for (uint32 index = 0; index < entries; index++)
+	for (uint32 index = 0; index < setup_params->sq_entries; index++)
 		array[index] = index;
 
 	return fd_io_uring;
@@ -2005,9 +2093,9 @@ static long syz_io_uring_setup(volatile long a0, volatile long a1, volatile long
 
 #endif
 
-#if SYZ_EXECUTOR || __NR_syz_io_uring_submit
+#if SYZ_EXECUTOR || __NR_syz_io_uring_submit || __NR_syz_ublk_setup || __NR_syz_ublk_setup_io_uring
 
-static long syz_io_uring_submit(volatile long a0, volatile long a1, volatile long a2)
+static long syz_io_uring_submit(volatile long a0, volatile long a1, volatile long a2, volatile long a3)
 {
 	// syzlang: syz_io_uring_submit(ring_ptr ring_ptr, sqes_ptr sqes_ptr, 		sqe ptr[in, io_uring_sqe])
 	// C:       syz_io_uring_submit(char* ring_ptr,       io_uring_sqe* sqes_ptr,    io_uring_sqe* sqe)
@@ -2016,19 +2104,22 @@ static long syz_io_uring_submit(volatile long a0, volatile long a1, volatile lon
 
 	// Cast to original
 	char* ring_ptr = (char*)a0; // This will be exposed to offsets in bytes
-	char* sqes_ptr = (char*)a1;
+	struct io_uring_params* setup_params = (struct io_uring_params*)a1;
+	setup_params->flags &= IORING_SETUP_SQE128;
+	char* sqes_ptr = (char*)a2;
 
-	char* sqe = (char*)a2;
+	char* sqe = (char*)a3;
+	uint32 sqe_size = (setup_params->flags & IORING_SETUP_SQE128) ? 128 : 64;
 
-	uint32 sq_ring_mask = *(uint32*)(ring_ptr + SQ_RING_MASK_OFFSET);
-	uint32* sq_tail_ptr = (uint32*)(ring_ptr + SQ_TAIL_OFFSET);
+	uint32 sq_ring_mask = *(uint32*)(ring_ptr + setup_params->sq_off.ring_mask);
+	uint32* sq_tail_ptr = (uint32*)(ring_ptr + setup_params->sq_off.tail);
 	uint32 sq_tail = *sq_tail_ptr & sq_ring_mask;
 
 	// Get the ptr to the destination for the sqe
-	char* sqe_dest = sqes_ptr + sq_tail * SIZEOF_IO_URING_SQE;
+	char* sqe_dest = sqes_ptr + sq_tail * sqe_size;
 
 	// Write the sqe entry to its destination in sqes
-	memcpy(sqe_dest, sqe, SIZEOF_IO_URING_SQE);
+	memcpy(sqe_dest, sqe, sqe_size);
 
 	// Write the index to the sqe array
 	uint32 sq_tail_next = *sq_tail_ptr + 1;
@@ -2042,6 +2133,249 @@ static long syz_io_uring_submit(volatile long a0, volatile long a1, volatile lon
 	return 0;
 }
 
+#endif
+
+#if SYZ_EXECUTOR || __NR_syz_ublk_setup || __NR_syz_ublk_setup_io_uring
+
+#include <sys/ioctl.h>
+#include <sys/types.h>
+
+#ifndef IORING_OP_URING_CMD
+#define IORING_OP_URING_CMD 46
+#endif
+
+struct ublksrv_ctrl_cmd {
+	/* sent to which device, must be valid */
+	__u32 dev_id;
+
+	/* sent to which queue, must be -1 if the cmd isn't for queue */
+	__u16 queue_id;
+	/*
+	 * cmd specific buffer, can be IN or OUT.
+	 */
+	__u16 len;
+	__u64 addr;
+
+	/* inline data */
+	__u64 data[1];
+
+	/*
+	 * Used for UBLK_F_UNPRIVILEGED_DEV and UBLK_CMD_GET_DEV_INFO2
+	 * only, include null char
+	 */
+	__u16 dev_path_len;
+	__u16 pad;
+	__u32 reserved;
+};
+
+#define UBLK_CMD_ADD_DEV 0x04
+
+#define UBLK_U_CMD_ADD_DEV \
+	_IOWR('u', UBLK_CMD_ADD_DEV, struct ublksrv_ctrl_cmd)
+
+struct io_uring_sqe {
+	__u8 opcode; /* type of operation for this sqe */
+	__u8 flags; /* IOSQE_ flags */
+	__u16 ioprio; /* ioprio for the request */
+	__s32 fd; /* file descriptor to do IO on */
+	union {
+		__u64 off; /* offset into file */
+		__u64 addr2;
+		struct {
+			__u32 cmd_op;
+			__u32 __pad1;
+		};
+	};
+	union {
+		__u64 addr; /* pointer to buffer or iovecs */
+		__u64 splice_off_in;
+		struct {
+			__u32 level;
+			__u32 optname;
+		};
+	};
+	__u32 len; /* buffer size or number of iovecs */
+	union {
+		// __kernel_rwf_t rw_flags;
+		__u32 fsync_flags;
+		__u16 poll_events; /* compatibility */
+		__u32 poll32_events; /* word-reversed for BE */
+		__u32 sync_range_flags;
+		__u32 msg_flags;
+		__u32 timeout_flags;
+		__u32 accept_flags;
+		__u32 cancel_flags;
+		__u32 open_flags;
+		__u32 statx_flags;
+		__u32 fadvise_advice;
+		__u32 splice_flags;
+		__u32 rename_flags;
+		__u32 unlink_flags;
+		__u32 hardlink_flags;
+		__u32 xattr_flags;
+		__u32 msg_ring_flags;
+		__u32 uring_cmd_flags;
+		__u32 waitid_flags;
+		__u32 futex_flags;
+		__u32 install_fd_flags;
+		__u32 nop_flags;
+	};
+	__u64 user_data; /* data to be passed back at completion time */
+	/* pack this to avoid bogus arm OABI complaints */
+	union {
+		/* index into fixed buffers, if used */
+		__u16 buf_index;
+		/* for grouped buffer selection */
+		__u16 buf_group;
+	} __attribute__((packed));
+	/* personality to use, if used */
+	__u16 personality;
+	union {
+		__s32 splice_fd_in;
+		__u32 file_index;
+		__u32 zcrx_ifq_idx;
+		__u32 optlen;
+		struct {
+			__u16 addr_len;
+			__u16 __pad3[1];
+		};
+	};
+	union {
+		struct {
+			__u64 addr3;
+			__u64 __pad2[1];
+		};
+		__u64 optval;
+		/*
+		 * If the ring is initialized with IORING_SETUP_SQE128, then
+		 * this field is used for 80 bytes of arbitrary command data
+		 */
+		__u8 cmd[0];
+	};
+};
+
+struct ublksrv_ctrl_dev_info {
+	__u16 nr_hw_queues;
+	__u16 queue_depth;
+	__u16 state;
+	__u16 pad0;
+
+	__u32 max_io_buf_bytes;
+	__u32 dev_id;
+
+	__s32 ublksrv_pid;
+	__u32 pad1;
+
+	__u64 flags;
+
+	/* For ublksrv internal use, invisible to ublk driver */
+	__u64 ublksrv_flags;
+
+	__u32 owner_uid; /* store by kernel */
+	__u32 owner_gid; /* store by kernel */
+	__u64 reserved1;
+	__u64 reserved2;
+};
+
+#define IORING_ENTER_GETEVENTS (1U << 0)
+
+static long syz_ublk_setup_io_uring(volatile long a0, volatile long a1, volatile long a2, volatile long a3)
+{
+	uint32 entries = (uint32)a0;
+	struct io_uring_params* params = (struct io_uring_params*)a1;
+	long** ptr_to_ring_ptr = (long**)a2;
+	long** ptr_to_sqes_ptr = (long**)a3;
+
+	// Modify io uring params with necessary flags for communicating with UBLK driver.
+	params->flags &= IORING_SETUP_SQE128 | IORING_SETUP_CQSIZE;
+	if (params->cq_entries < 32) {
+		params->cq_entries = 32;
+	}
+	return syz_io_uring_setup(entries, (long)params, (long)ptr_to_ring_ptr,
+				  (long)ptr_to_sqes_ptr);
+}
+
+static long syz_ublk_setup(volatile long a0, volatile long a1, volatile long a2, volatile long a3, volatile long a4)
+{
+	// syzlang: syz_ublk_setup(entries int32[1:IORING_MAX_ENTRIES], params ptr[inout, io_uring_params], ring_ptr ptr[out, ring_ptr], sqes_ptr ptr[out, sqes_ptr]) fd_io_uring
+	// C:       syz_ublk_setup(uint32 entries, struct io_uring_params* params, void** ring_ptr_out, void** sqes_ptr_out) // returns uint32 fd_io_uring
+
+	uint32 fd_ctrl = (uint32)a0;
+	struct ublksrv_ctrl_dev_info* info_ptr = (struct ublksrv_ctrl_dev_info*)a1;
+	struct io_uring_params* p = (struct io_uring_params*)a2;
+	long** ptr_to_ring_ptr = (long**)a3;
+	long** ptr_to_sqes_ptr = (long**)a4;
+
+	// Modify io uring params with necessary flags for communicating with UBLK driver.
+	p->flags &= IORING_SETUP_SQE128 | IORING_SETUP_CQSIZE;
+	if (p->cq_entries < 32)
+		p->cq_entries = 32;
+
+	int ring_fd = syz_io_uring_setup(32, (long)p, (long)ptr_to_ring_ptr,
+					 (long)ptr_to_sqes_ptr);
+	if (ring_fd < 0) {
+		debug("Failed to setup io_uring for ublk ctrl device\n");
+		return -1;
+	}
+
+	// 2. Now use the existing syz_io_uring_submit logic to send the UBLK_CMD_ADD_DEV
+	uint32 sqe_size = p->flags & IORING_SETUP_SQE128 ? 128 : 64;
+	void* sqe_buf = malloc(sqe_size);
+	memset(sqe_buf, 0, sqe_size);
+	struct io_uring_sqe* sqe = (struct io_uring_sqe*)sqe_buf;
+	sqe->fd = fd_ctrl; // The /dev/ublk-control FD
+	sqe->opcode = IORING_OP_URING_CMD;
+
+	__u32* addr = (__u32*)(&sqe->off);
+	addr[0] = UBLK_U_CMD_ADD_DEV;
+	addr[1] = 0;
+
+	// Setup ublk-specific command header
+	__u32* cmd_ptr = (__u32*)(&sqe->addr3);
+	cmd_ptr[0] = info_ptr->dev_id;
+	__u16* cmd_ptr16 = (__u16*)(&cmd_ptr[1]);
+	cmd_ptr16[0] = (uint16_t)-1;
+	cmd_ptr16[1] = (uint16_t)sizeof(struct ublksrv_ctrl_dev_info);
+	sqe->__pad2[0] = (__u64)info_ptr;
+
+	sqe->user_data = (unsigned long)cmd_ptr;
+
+	long* ring_ptr = *ptr_to_ring_ptr;
+	long* sqes_ptr = *ptr_to_sqes_ptr;
+
+	if (ring_ptr == nullptr || sqes_ptr == nullptr) {
+		//		fprintf(stdout, "TEJA Syzkaller: ring_ptr | sqes_ptr is null before submit\n");
+		return -1;
+	}
+
+	//	fprintf(stdout, "TEJA Syzkaller: submitting sqe\n");
+	// Use the existing submit helper
+	long res = syz_io_uring_submit((long)ring_ptr, (long)p, (long)sqes_ptr, (long)sqe);
+	//	fprintf(stdout, "TEJA Syzkaller: SQE Submitted res: %ld\n", res);
+	if (res < 0) {
+		//		fprintf(stderr, "TEJA Syzkaller: SQE Submitted res error: %ld\n", res);
+		return -1;
+	}
+
+	// 3. Enter the kernel
+	//	fprintf(stdout, "TEJA Syzkaller: entering ublk sqe\n");
+	res = syscall(__NR_io_uring_enter, ring_fd, 1, 1, IORING_ENTER_GETEVENTS, NULL, _NSIG / 8);
+	//	fprintf(stdout, "TEJA Syzkaller: enter syscall res: %ld\n", res);
+	if (res < 0) {
+		//		fprintf(stderr, "TEJA Syzkaller: enter syscall res error: %ld\n", res);
+		return -1;
+	}
+
+	// 4. complete above submission
+	//	fprintf(stdout, "TEJA Syzkaller: uring completion wait\n");
+	int complete_res = syz_io_uring_completev2((long)ring_ptr, (long)p);
+	fprintf(stdout, "TEJA Syzkaller: uring completion ctrl fd: %d wait res: %d\n", fd_ctrl, complete_res);
+	if (complete_res < 0) {
+		//		fprintf(stderr, "TEJA Syzkaller: uring completion wait res error: %ld\n", res);
+		return -1;
+	}
+	return ring_fd;
+}
 #endif
 
 #endif

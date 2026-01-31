@@ -1,0 +1,206 @@
+# Data types and resources for ublk fuzzer
+include <uapi/linux/ublk_cmd.h>
+include <uapi/linux/io_uring.h>
+
+resource fd_ublk_ctrl[fd]
+#resource fd_ublk_io_uring[fd]
+resource ublk_dev_id[int32]: -1, 0, 1, 2, 3
+
+# _IOR types (Kernel writes to user)
+ioctl$UBLK_U_CMD_GET_QUEUE_AFFINITY(fd fd_ublk_ctrl, cmd const[UBLK_U_CMD_GET_QUEUE_AFFINITY], arg ptr[out, ublksrv_ctrl_cmd$ANY])
+ioctl$UBLK_U_CMD_GET_DEV_INFO(fd fd_ublk_ctrl, cmd const[UBLK_U_CMD_GET_DEV_INFO], arg ptr[out, ublksrv_ctrl_cmd$ANY])
+ioctl$UBLK_U_CMD_GET_PARAMS(fd fd_ublk_ctrl, cmd const[UBLK_U_CMD_GET_PARAMS], arg ptr[out, ublksrv_ctrl_cmd$ANY])
+ioctl$UBLK_U_CMD_GET_DEV_INFO2(fd fd_ublk_ctrl, cmd const[UBLK_U_CMD_GET_DEV_INFO2], arg ptr[out, ublksrv_ctrl_cmd$ANY])
+ioctl$UBLK_U_CMD_GET_FEATURES(fd fd_ublk_ctrl, cmd const[UBLK_U_CMD_GET_FEATURES], arg ptr[out, ublksrv_ctrl_cmd$ANY])
+# ioctl$UBLK_U_CMD_DEL_DEV_ASYNC(fd fd_ublk_ctrl, cmd const[UBLK_U_CMD_DEL_DEV_ASYNC], arg ptr[out, ublksrv_ctrl_cmd])
+
+# _IOWR types (User and Kernel both read/write)
+ioctl$UBLK_U_CMD_ADD_DEV(fd fd_ublk_ctrl, cmd const[UBLK_U_CMD_ADD_DEV], arg ptr[inout, ublksrv_ctrl_cmd$ANY])
+ioctl$UBLK_U_CMD_DEL_DEV(fd fd_ublk_ctrl, cmd const[UBLK_U_CMD_DEL_DEV], arg ptr[inout, ublksrv_ctrl_cmd$ANY])
+ioctl$UBLK_U_CMD_START_DEV(fd fd_ublk_ctrl, cmd const[UBLK_U_CMD_START_DEV], arg ptr[inout, ublksrv_ctrl_cmd$ANY])
+ioctl$UBLK_U_CMD_STOP_DEV(fd fd_ublk_ctrl, cmd const[UBLK_U_CMD_STOP_DEV], arg ptr[inout, ublksrv_ctrl_cmd$ANY])
+ioctl$UBLK_U_CMD_SET_PARAMS(fd fd_ublk_ctrl, cmd const[UBLK_U_CMD_SET_PARAMS], arg ptr[inout, ublksrv_ctrl_cmd$ANY])
+ioctl$UBLK_U_CMD_START_USER_RECOVERY(fd fd_ublk_ctrl, cmd const[UBLK_U_CMD_START_USER_RECOVERY], arg ptr[inout, ublksrv_ctrl_cmd$ANY])
+ioctl$UBLK_U_CMD_END_USER_RECOVERY(fd fd_ublk_ctrl, cmd const[UBLK_U_CMD_END_USER_RECOVERY], arg ptr[inout, ublksrv_ctrl_cmd$ANY])
+
+ublk_cmds = UBLK_U_CMD_ADD_DEV, UBLK_U_CMD_DEL_DEV, UBLK_U_CMD_START_DEV, UBLK_U_CMD_STOP_DEV, UBLK_U_CMD_SET_PARAMS, UBLK_U_CMD_START_USER_RECOVERY, UBLK_U_CMD_END_USER_RECOVERY, UBLK_U_CMD_GET_QUEUE_AFFINITY, UBLK_U_CMD_GET_DEV_INFO, UBLK_U_CMD_GET_PARAMS, UBLK_U_CMD_GET_DEV_INFO2, UBLK_U_CMD_GET_FEATURES
+#, UBLK_U_CMD_DEL_DEV_ASYNC
+
+# --- Opening Devices ---
+
+syz_create_resource$ublk(dev_id int32[-1:1024]) ublk_dev_id
+
+openat$ublk_ctrl(fd const[AT_FDCWD], file ptr[in, string["/dev/ublk-control"]], flags const[O_RDWR], mode const[0]) fd_ublk_ctrl
+
+syz_ublk_setup_io_uring(entries int32[1:IORING_MAX_ENTRIES], params ptr[inout, io_uring_params], ring_ptr ptr[out, ring_ptr], sqes_ptr ptr[out, sqes_ptr]) fd_io_uring
+
+# --- Queue Initialization ---
+# resource fd_ublk_ring[fd_io_uring]
+syz_ublk_setup(fd fd_ublk_ctrl, info ptr[inout, ublksrv_ctrl_dev_info], params ptr[inout, io_uring_params], ring_ptr ptr[out, ring_ptr], sqes_ptr ptr[out, sqes_ptr]) fd_io_uring
+
+# --- Control Plane (io_uring passthrough commands) ---
+# Syzkaller uses 'io_uring_cmd$OPCODE' naming convention
+# Now define a command that uses the ring created above
+# This forces syzkaller to call setup() before calling submit$UBLK_START
+
+syz_io_uring_submit$UBLK(ring_ptr ring_ptr, params ptr[in, io_uring_params], sqes_ptr sqes_ptr, sqe ptr[inout, io_uring_sqe_ublk])
+
+ublksrv_ctrl_cmd_u [
+	add_dev_cmd		ublksrv_ctrl_cmd$ADD_DEV
+	get_queue_affinity_cmd	ublksrv_ctrl_cmd$GET_QUEUE_AFFINITY
+	get_dev_info_cmd	ublksrv_ctrl_cmd$GET_DEV_INFO
+	get_params_cmd		ublksrv_ctrl_cmd$GET_PARAMS
+]
+
+type ublksrv_ctrl_cmd[LEN, ADDR, DATA] {
+	dev_id		ublk_dev_id	(inout)
+	queue_id	const[-1, int16]
+
+	len		LEN
+	addr		ADDR
+
+	data		DATA
+
+	dev_path_len	const[0, int16]
+	pad		const[0, int16]
+	reserved	const[0, int32]
+}
+
+type ublksrv_ctrl_cmd$ADD_DEV ublksrv_ctrl_cmd[len[addr, int16], ptr64[in, ublksrv_ctrl_dev_info], const[0, int64]]
+type ublksrv_ctrl_cmd$GET_QUEUE_AFFINITY ublksrv_ctrl_cmd[len[addr, int16], ptr64[out, int64], int64]
+type ublksrv_ctrl_cmd$GET_DEV_INFO ublksrv_ctrl_cmd[len[addr, int16], ptr64[out, ublksrv_ctrl_dev_info], const[0, int64]]
+type ublksrv_ctrl_cmd$GET_PARAMS ublksrv_ctrl_cmd[len[addr, int16], ptr64[out, int64], const[0, int64]]
+type ublksrv_ctrl_cmd$ANY ublksrv_ctrl_cmd[int16, int64, int64]
+
+ublksrv_ctrl_dev_info {
+	nr_hw_queues		int16[1:64]
+	queue_depth		const[128, int16]
+	state			const[0, int16]
+	pad0			const[0, int16]
+	max_io_buf_bytes	const[524288, int32]
+	dev_id			ublk_dev_id	(inout)
+	ublksrv_pid		const[0, int32]
+	pad1			const[0, int32]
+	flags			flags[ublk_f_flags, int64]
+	ublksrv_flags		const[0, int64]
+	owner_uid		const[0, int32]
+	owner_gid		const[0, int32]
+	reserved1		const[0, int64]
+	reserved2		const[0, int64]
+}
+
+# ublk_params {
+
+# }
+
+# ublk_start_cmd {
+#     data_ptr    int64
+#     dev_id      ublk_dev_id
+#     queue_id    const[-1, int16]
+#     unused      int16
+#     addr        int64
+# }
+
+# io_uring_cmd$UBLK_U_CMD_ADD_DEV(fd fd_ublk_ctrl, opcode const[IORING_OP_URING_CMD], sqe_flags int8, cmd_op const[UBLK_U_CMD_ADD_DEV], arg ptr[inout, ublksrv_ctrl_cmd_add])
+# io_uring_cmd$UBLK_U_CMD_START_DEV(fd fd_ublk_ctrl, opcode const[IORING_OP_URING_CMD], sqe_flags int8, cmd_op const[UBLK_U_CMD_START_DEV], arg ptr[in, ublksrv_ctrl_cmd_start])
+# io_uring_cmd$UBLK_U_CMD_GET_DEV_INFO(fd fd_ublk_ctrl, opcode const[IORING_OP_URING_CMD], sqe_flags int8, cmd_op const[UBLK_U_CMD_GET_DEV_INFO], arg ptr[in, ublksrv_ctrl_cmd_get])
+# io_uring_cmd$UBLK_U_CMD_SET_PARAMS(fd fd_ublk_ctrl, opcode const[IORING_OP_URING_CMD], sqe_flags int8, cmd_op const[UBLK_U_CMD_SET_PARAMS], arg ptr[in, ublksrv_ctrl_cmd_params])
+
+# # --- Data Plane ---
+# io_uring_cmd$UBLK_U_IO_FETCH_REQ(fd fd_ublk_char, opcode const[IORING_OP_URING_CMD], cmd_op const[UBLK_U_IO_FETCH_REQ], arg ptr[in, ublksrv_io_cmd])
+# io_uring_cmd$UBLK_U_IO_COMMIT_AND_FETCH_REQ(fd fd_ublk_char, opcode const[IORING_OP_URING_CMD], cmd_op const[UBLK_U_IO_COMMIT_AND_FETCH_REQ], arg ptr[in, ublksrv_io_cmd])
+
+# # --- Structures ---
+
+# ublksrv_ctrl_cmd_get {
+#     dev_id      int32
+#     queue_id    int16
+#     len         len[addr, int16]
+#     addr        ptr[inout, ublksrv_ctrl_dev_info]
+# }
+
+# ublksrv_ctrl_cmd_add {
+#     dev_id      int32
+#     queue_id    const[-1, int16]
+#     len         len[addr, int16]
+#     addr        ptr[inout, ublksrv_ctrl_dev_info]
+#     # Removed the trailing comment/identifier that caused line 41/42 errors
+#     data        array[int64, 1]
+#     path_len    int16
+#     pad         int16
+#     reserved    int32
+# }
+
+# ublksrv_ctrl_cmd_start {
+#     dev_id      int32
+#     queue_id    int16
+#     len         int16
+#     addr        int64
+#     data        array[int64, 1]
+# }
+
+# ublksrv_io_cmd {
+#     q_id    int16
+#     tag     int16
+#     result  int32
+#     addr    int64
+#     pad     array[int8, 24]
+# }
+
+# ublksrv_ctrl_cmd_params {
+#     dev_id      int32
+#     queue_id    int16
+#     len         len[p, int16]
+#     p           ptr[in, ublk_params]
+# }
+
+# ublk_params {
+#     len     len[parent, int32]
+#     types   flags[ublk_param_types, int32]
+#     basic   ublk_param_basic
+#     discard ublk_param_discard
+#     devt    ublk_param_devt
+#     zoned   ublk_param_zoned
+# }
+
+# ublk_param_basic {
+#     attrs               flags[ublk_attr_flags, int32]
+#     logical_bs_shift    int8[9:12]
+#     physical_bs_shift   int8[9:12]
+#     io_opt_shift        int8
+#     io_min_shift        int8
+#     max_sectors         int32
+#     chunk_sectors       int32
+#     dev_sectors         int64
+#     virt_boundary_mask  int64
+# }
+
+# # --- Flags & Constants ---
+
+# ublk_f_flags = UBLK_F_SUPPORT_ZERO_COPY, UBLK_F_URING_CMD_COMP_IN_TASK, UBLK_F_NEED_GET_DATA, UBLK_F_USER_RECOVERY, UBLK_F_USER_RECOVERY_REISSUE, UBLK_F_UNPRIVILEGED_DEV, UBLK_F_CMD_IOCTL_ENCODE, UBLK_F_USER_COPY, UBLK_F_ZONED
+ublk_f_flags = UBLK_F_NEED_GET_DATA
+# ublk_attr_flags = UBLK_ATTR_READ_ONLY, UBLK_ATTR_ROTATIONAL, UBLK_ATTR_VOLATILE_CACHE, UBLK_ATTR_FUA
+# ublk_param_types = UBLK_PARAM_TYPE_BASIC, UBLK_PARAM_TYPE_DISCARD, UBLK_PARAM_TYPE_DEVT, UBLK_PARAM_TYPE_ZONED
+
+# ublk_param_discard {
+#     discard_alignment           int32
+#     discard_granularity         int32
+#     max_discard_sectors         int32
+#     max_write_zeroes_sectors    int32
+#     max_discard_segments        int16
+#     reserved0                   int16
+# }
+
+# ublk_param_devt {
+#     char_major  int32
+#     char_minor  int32
+#     disk_major  int32
+#     disk_minor  int32
+# }
+
+# ublk_param_zoned {
+#     max_open_zones              int32
+#     max_active_zones            int32
+#     max_zone_append_sectors     int32
+#     reserved                    array[int8, 20]
+# }

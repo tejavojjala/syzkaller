@@ -851,8 +851,9 @@ func subsystems_linux() []*Subsystem {
 	}
 
 	block = Subsystem{
-		Name:  "block",
-		Lists: []string{"linux-block@vger.kernel.org"},
+		Name:     "block",
+		Syscalls: []string{"syz_ublk_setup"},
+		Lists:    []string{"linux-block@vger.kernel.org"},
 		Parents: []*Subsystem{
 			// Auto-inferred: 213 common files among 213/59048.
 			&kernel,
