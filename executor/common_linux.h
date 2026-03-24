@@ -1849,7 +1849,7 @@ static long syz_emit_ethernet(volatile long a0, volatile long a1, volatile long 
 }
 #endif
 
-#if SYZ_EXECUTOR || __NR_syz_io_uring_submit || __NR_syz_io_uring_complete || __NR_syz_io_uring_setup || __NR_syz_io_uring_params
+#if SYZ_EXECUTOR || __NR_syz_io_uring_submit || __NR_syz_io_uring_complete || __NR_syz_io_uring_setup || __NR_syz_io_uring_params || __NR_syz_ublk_setup_io_uring
 
 #define SIZEOF_IO_URING_SQE 64
 #define SIZEOF_IO_URING_SQE128 128
@@ -1857,6 +1857,7 @@ static long syz_emit_ethernet(volatile long a0, volatile long a1, volatile long 
 #define SIZEOF_IO_URING_CQE32 32
 #define IORING_SETUP_SQE128 (1U << 10)
 #define IORING_SETUP_CQE32 (1U << 11)
+#define IORING_SETUP_CQSIZE (1U << 3)
 
 struct io_sqring_offsets {
 	uint32 head;
@@ -1896,6 +1897,7 @@ struct io_uring_params {
 static long syz_io_uring_params(volatile long a0)
 {
 	struct io_uring_params* params = (struct io_uring_params*)a0;
+	syscall(__NR_io_uring_setup, 32, params);
 	long ring_params_ptr = (long)params;
 	return ring_params_ptr;
 }
@@ -1945,7 +1947,8 @@ static long syz_io_uring_complete(volatile long a0, volatile long a1)
 	// which produces an fd instance. Check cqe.user_data, which should be the same
 	// as sqe.user_data for that operation. If it falls in that unique range, return
 	// cqe.res as fd. Otherwise, just return an invalid fd.
-	return (cqe.user_data == 0x12345 || cqe.user_data == 0x23456) ? (long)cqe.res : (long)-1;
+	// return (cqe.user_data == 0x12345 || cqe.user_data == 0x23456) ? (long)cqe.res : (long)-1;
+	return (long)cqe.res;
 }
 
 #endif
@@ -2036,6 +2039,26 @@ static long syz_io_uring_submit(volatile long a0, volatile long a1, volatile lon
 }
 
 #endif
+
+#endif
+
+#if SYZ_EXECUTOR || __NR_syz_ublk_setup_io_uring
+
+static long syz_ublk_setup_io_uring(volatile long a0, volatile long a1, volatile long a2, volatile long a3)
+{
+	uint32 entries = (uint32)a0;
+	struct io_uring_params* params = (struct io_uring_params*)a1;
+	long** ptr_to_ring_ptr = (long**)a2;
+	long** ptr_to_sqes_ptr = (long**)a3;
+
+	// Modify io uring params with necessary flags for communicating with UBLK driver.
+	params->flags &= IORING_SETUP_SQE128 | IORING_SETUP_CQSIZE;
+	if (params->cq_entries < 32) {
+		params->cq_entries = 32;
+	}
+	return syz_io_uring_setup(entries, (long)params, (long)ptr_to_ring_ptr,
+				  (long)ptr_to_sqes_ptr);
+}
 
 #endif
 

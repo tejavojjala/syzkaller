@@ -1,0 +1,93 @@
+# Data types and resources for ublk fuzzer
+include <uapi/linux/ublk_cmd.h>
+include <uapi/linux/io_uring.h>
+
+resource fd_ublk_ctrl[fd]
+# resource ublk_dev_id[int32]: -1, 0, 1, 2, 3
+
+# _IOR types (Kernel writes to user)
+ioctl$UBLK_U_CMD_GET_QUEUE_AFFINITY(fd fd_ublk_ctrl, cmd const[UBLK_U_CMD_GET_QUEUE_AFFINITY], arg ptr[out, ublksrv_ctrl_cmd$ANY])
+ioctl$UBLK_U_CMD_GET_DEV_INFO(fd fd_ublk_ctrl, cmd const[UBLK_U_CMD_GET_DEV_INFO], arg ptr[out, ublksrv_ctrl_cmd$ANY])
+ioctl$UBLK_U_CMD_GET_PARAMS(fd fd_ublk_ctrl, cmd const[UBLK_U_CMD_GET_PARAMS], arg ptr[out, ublksrv_ctrl_cmd$ANY])
+ioctl$UBLK_U_CMD_GET_DEV_INFO2(fd fd_ublk_ctrl, cmd const[UBLK_U_CMD_GET_DEV_INFO2], arg ptr[out, ublksrv_ctrl_cmd$ANY])
+ioctl$UBLK_U_CMD_GET_FEATURES(fd fd_ublk_ctrl, cmd const[UBLK_U_CMD_GET_FEATURES], arg ptr[out, ublksrv_ctrl_cmd$ANY])
+# ioctl$UBLK_U_CMD_DEL_DEV_ASYNC(fd fd_ublk_ctrl, cmd const[UBLK_U_CMD_DEL_DEV_ASYNC], arg ptr[out, ublksrv_ctrl_cmd])
+
+# _IOWR types (User and Kernel both read/write)
+ioctl$UBLK_U_CMD_ADD_DEV(fd fd_ublk_ctrl, cmd const[UBLK_U_CMD_ADD_DEV], arg ptr[inout, ublksrv_ctrl_cmd$ANY])
+ioctl$UBLK_U_CMD_DEL_DEV(fd fd_ublk_ctrl, cmd const[UBLK_U_CMD_DEL_DEV], arg ptr[inout, ublksrv_ctrl_cmd$ANY])
+ioctl$UBLK_U_CMD_START_DEV(fd fd_ublk_ctrl, cmd const[UBLK_U_CMD_START_DEV], arg ptr[inout, ublksrv_ctrl_cmd$ANY])
+ioctl$UBLK_U_CMD_STOP_DEV(fd fd_ublk_ctrl, cmd const[UBLK_U_CMD_STOP_DEV], arg ptr[inout, ublksrv_ctrl_cmd$ANY])
+ioctl$UBLK_U_CMD_SET_PARAMS(fd fd_ublk_ctrl, cmd const[UBLK_U_CMD_SET_PARAMS], arg ptr[inout, ublksrv_ctrl_cmd$ANY])
+ioctl$UBLK_U_CMD_START_USER_RECOVERY(fd fd_ublk_ctrl, cmd const[UBLK_U_CMD_START_USER_RECOVERY], arg ptr[inout, ublksrv_ctrl_cmd$ANY])
+ioctl$UBLK_U_CMD_END_USER_RECOVERY(fd fd_ublk_ctrl, cmd const[UBLK_U_CMD_END_USER_RECOVERY], arg ptr[inout, ublksrv_ctrl_cmd$ANY])
+
+ublk_cmds = UBLK_U_CMD_ADD_DEV
+# , UBLK_U_CMD_DEL_DEV, UBLK_U_CMD_START_DEV, UBLK_U_CMD_STOP_DEV, UBLK_U_CMD_SET_PARAMS, UBLK_U_CMD_START_USER_RECOVERY, UBLK_U_CMD_END_USER_RECOVERY, UBLK_U_CMD_GET_QUEUE_AFFINITY, UBLK_U_CMD_GET_DEV_INFO, UBLK_U_CMD_GET_PARAMS, UBLK_U_CMD_GET_DEV_INFO2, UBLK_U_CMD_GET_FEATURES
+#, UBLK_U_CMD_DEL_DEV_ASYNC
+
+# --- Opening Devices ---
+
+# syz_create_resource$ublk(dev_id int32[-1:1024]) ublk_dev_id
+
+openat$ublk_ctrl(fd const[AT_FDCWD], file ptr[in, string["/dev/ublk-control"]], flags const[O_RDWR], mode const[0]) fd_ublk_ctrl
+
+syz_ublk_setup_io_uring(entries int32[1:IORING_MAX_ENTRIES], ring_params_ptr ring_params_ptr, ring_ptr ptr[out, ring_ptr], sqes_ptr ptr[out, sqes_ptr]) fd_io_uring
+
+# --- Queue Initialization ---
+# resource fd_ublk_ring[fd_io_uring]
+# syz_ublk_setup(fd fd_ublk_ctrl, info ptr[inout, ublksrv_ctrl_dev_info], params ptr[inout, io_uring_params], ring_ptr ptr[out, ring_ptr], sqes_ptr ptr[out, sqes_ptr]) fd_io_uring
+
+# --- Control Plane (io_uring passthrough commands) ---
+syz_io_uring_submit$UBLK(ring_params_ptr ring_params_ptr, ring_ptr ring_ptr, sqes_ptr sqes_ptr, sqe ptr[inout, io_uring_sqe_ublk])
+
+ublksrv_ctrl_cmd_u [
+	add_dev_cmd	ublksrv_ctrl_cmd$ADD_DEV
+# get_queue_affinity_cmd	ublksrv_ctrl_cmd$GET_QUEUE_AFFINITY
+# get_dev_info_cmd	ublksrv_ctrl_cmd$GET_DEV_INFO
+# get_params_cmd		ublksrv_ctrl_cmd$GET_PARAMS
+]
+
+type ublksrv_ctrl_cmd[LEN, ADDR, DATA] {
+	dev_id		const[1, int32]
+	queue_id	const[-1, int16]
+
+	len		LEN
+	addr		ADDR
+
+	data		DATA
+
+	dev_path_len	const[0, int16]
+	pad		const[0, int16]
+	reserved	const[0, int32]
+}
+
+type ublksrv_ctrl_cmd$ADD_DEV ublksrv_ctrl_cmd[len[addr, int16], ptr64[in, ublksrv_ctrl_dev_info], const[0, int64]]
+# type ublksrv_ctrl_cmd$GET_QUEUE_AFFINITY ublksrv_ctrl_cmd[len[addr, int16], ptr64[out, int64], int64]
+# type ublksrv_ctrl_cmd$GET_DEV_INFO ublksrv_ctrl_cmd[len[addr, int16], ptr64[out, ublksrv_ctrl_dev_info], const[0, int64]]
+# type ublksrv_ctrl_cmd$GET_PARAMS ublksrv_ctrl_cmd[len[addr, int16], ptr64[out, int64], const[0, int64]]
+type ublksrv_ctrl_cmd$ANY ublksrv_ctrl_cmd[int16, int64, int64]
+
+ublksrv_ctrl_dev_info {
+	nr_hw_queues		int16[1:64]
+	queue_depth		const[128, int16]
+	state			const[0, int16]
+	pad0			const[0, int16]
+	max_io_buf_bytes	const[524288, int32]
+	dev_id			const[1, int32]
+	ublksrv_pid		const[0, int32]
+	pad1			const[0, int32]
+	flags			flags[ublk_f_flags, int64]
+	ublksrv_flags		const[0, int64]
+	owner_uid		const[0, int32]
+	owner_gid		const[0, int32]
+	reserved1		const[0, int64]
+	reserved2		const[0, int64]
+}
+
+# # --- Flags & Constants ---
+
+# ublk_f_flags = UBLK_F_SUPPORT_ZERO_COPY, UBLK_F_URING_CMD_COMP_IN_TASK, UBLK_F_NEED_GET_DATA, UBLK_F_USER_RECOVERY, UBLK_F_USER_RECOVERY_REISSUE, UBLK_F_UNPRIVILEGED_DEV, UBLK_F_CMD_IOCTL_ENCODE, UBLK_F_USER_COPY, UBLK_F_ZONED
+ublk_f_flags = UBLK_F_NEED_GET_DATA
+# ublk_attr_flags = UBLK_ATTR_READ_ONLY, UBLK_ATTR_ROTATIONAL, UBLK_ATTR_VOLATILE_CACHE, UBLK_ATTR_FUA
+# ublk_param_types = UBLK_PARAM_TYPE_BASIC, UBLK_PARAM_TYPE_DISCARD, UBLK_PARAM_TYPE_DEVT, UBLK_PARAM_TYPE_ZONED

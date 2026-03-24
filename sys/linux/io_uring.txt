@@ -4,6 +4,7 @@
 # See http://kernel.dk/io_uring.pdf
 
 include <uapi/linux/io_uring.h>
+include <uapi/linux/ublk_cmd.h>
 # For EPOLL_CTL_ADD, EPOLL_CTL_MOD, EPOLL_CTL_DEL
 include <uapi/linux/eventpoll.h>
 
@@ -26,6 +27,7 @@ syz_io_uring_setup(entries int32[1:IORING_MAX_ENTRIES], ring_params_ptr ring_par
 
 io_uring_setup(entries int32[1:IORING_MAX_ENTRIES], ring_params_ptr ring_params_ptr) fd_io_uring
 io_uring_enter(fd fd_io_uring, to_submit int32[0:IORING_MAX_ENTRIES], min_complete int32[0:IORING_MAX_CQ_ENTRIES], flags flags[io_uring_enter_flags], sigmask ptr[in, sigset_t], size len[sigmask])
+io_uring_enter$SIMPLE(fd fd_io_uring, to_submit int32[1:2], min_complete int32[1:2], flags const[IORING_ENTER_GETEVENTS], sigmask ptr[in, sigset_t], size len[sigmask])
 io_uring_register$IORING_REGISTER_BUFFERS(fd fd_io_uring, opcode const[IORING_REGISTER_BUFFERS], arg ptr[in, array[iovec_out]], nr_args len[arg])
 io_uring_register$IORING_UNREGISTER_BUFFERS(fd fd_io_uring, opcode const[IORING_UNREGISTER_BUFFERS], arg const[0], nr_args const[0])
 io_uring_register$IORING_REGISTER_FILES(fd fd_io_uring, opcode const[IORING_REGISTER_FILES], arg ptr[in, array[fd]], nr_args len[arg])
@@ -305,7 +307,7 @@ io_uring_sqe_u [
 #	IORING_OP_FGETXATTR		io_uring_sqe$fgetxatt
 #	IORING_OP_GETXATTR		io_uring_sqe$etxatt
 #	IORING_OP_SOCKET		io_uring_sqe$socket
-#	IORING_OP_URING_CMD		io_uring_sqe$uring_cmd
+	IORING_OP_URING_CMD	io_uring_sqe_ublk
 #	IORING_OP_SEND_ZC		io_uring_sqe$send_zc
 ]
 
@@ -334,6 +336,30 @@ type io_uring_sqe[OP, IOPRIO, FD, OFF, ADDR, LEN, MISC_FLAGS, USER_DATA, MISC] {
 } [size[SIZEOF_IO_URING_SQE]]
 
 define SIZEOF_IO_URING_SQE	64
+
+# 0, IORING_URING_CMD_FIXED
+uring_cmd_flags = 0, 1
+
+io_uring_sqe_ublk {
+	opcode			const[IORING_OP_URING_CMD, int8]
+	flags			flags[iosqe_flags, int8]
+	ioprio			const[0, int16]
+	fd			fd_ublk_ctrl
+	cmd_op			flags[ublk_cmds, int32]
+	pad1			const[0, int32]
+	addr			const[0, int64]
+	len			const[0, int32]
+	uring_flags		flags[uring_cmd_flags, int32]
+	user_data		int64
+
+	buf_index_unused	const[0, int16]
+	ioring_personality_id	ioring_personality_id[opt]
+	pad_unused		array[const[0, int8], 4]
+	cmd			ublksrv_ctrl_cmd_u
+	pad2_unused		array[const[0, int32], 12]
+} [size[SIZEOF_IO_URING_SQE_UBLK]]
+
+define SIZEOF_IO_URING_SQE_UBLK	128
 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 

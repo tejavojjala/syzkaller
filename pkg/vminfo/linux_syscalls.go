@@ -95,6 +95,7 @@ var linuxSyscallChecks = map[string]func(*checkContext, *prog.Syscall) string{
 	"syz_io_uring_setup":            alwaysSupported,
 	"syz_io_uring_submit":           alwaysSupported,
 	"syz_io_uring_complete":         alwaysSupported,
+	"syz_ublk_setup_io_uring":       alwaysSupported,
 	"syz_memcpy_off":                alwaysSupported,
 	"syz_btf_id_by_name":            linuxBtfVmlinuxSupported,
 	"syz_fuse_handle_req":           alwaysSupported,
