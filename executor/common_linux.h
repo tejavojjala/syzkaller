@@ -2214,6 +2214,42 @@ static long syz_ublk_add_dev(volatile long a0, volatile long a1, volatile long a
 
 #endif
 
+
+#if SYZ_EXECUTOR || __NR_syz_ublk_open_chdev || __NR_syz_ublk_open_bdev
+
+#include <fcntl.h>
+
+static long open_ublk_device(volatile long a0, const char* prefix)
+{
+	int dev_id = (int)a0;
+	char path[64];
+
+	// Safety check to avoid absurd paths
+	if (dev_id < 0 || dev_id > 1024)
+		return -1;
+
+	snprintf(path, sizeof(path), "/dev/%s%d", prefix, dev_id);
+	return (long)open(path, O_RDWR);
+}
+
+#endif
+
+#if SYZ_EXECUTOR || __NR_syz_ublk_open_chdev
+
+static long syz_ublk_open_chdev(volatile long a0)
+{
+	return open_ublk_device(a0, "ublkc");
+}
+
+#endif
+
+#if SYZ_EXECUTOR || __NR_syz_ublk_open_bdev
+
+static long syz_ublk_open_bdev(volatile long a0)
+{
+	return open_ublk_device(a0, "ublkb");
+}
+
 #endif
 
 #if SYZ_EXECUTOR || __NR_syz_usbip_server_init
